@@ -1,0 +1,9 @@
+{
+  "name": "pecunia-personal-finance",
+  "version": "1.1.0",
+  "private": true,
+  "description": "PECUNIA personal finance PWA with encrypted-cookie Google OAuth and Drive backup",
+  "engines": { "node": "24.x" },
+  "scripts": { "start": "vercel dev" },
+  "devDependencies": { "vercel": "^41.6.2" }
+}

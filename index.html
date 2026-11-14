@@ -3649,13 +3649,7 @@
           style="display: none; margin: 16px auto 0"
         >
           Continue with Google</button
-        ><button
-          id="startupLocalBtn"
-          class="btn"
-          style="display: none; margin: 10px auto 0"
         >
-          Open local copy instead
-        </button>
       </div>
     </div>
     <div class="app" id="pecuniaApp" style="visibility: hidden">
@@ -4394,22 +4388,17 @@
         render();
         centerSegTab();
       }
-      function centerSegTab() {
+      function centerSegTab(instant) {
         const nav = $("#segNav"),
           btn = nav && nav.querySelector("button.active");
         if (!nav || !btn || nav.scrollWidth <= nav.clientWidth) return;
-        // clicked tab stays put; the strip only scrolls when the left-most or
-        // right-most visible tab is clicked, shifting one tab so it ends up in the middle
-        const sib = btn.nextElementSibling || btn.previousElementSibling,
-          step = sib ? Math.abs(sib.offsetLeft - btn.offsetLeft) : btn.offsetWidth,
-          rel = btn.offsetLeft - nav.scrollLeft,
-          atLeft = rel < step / 2,
-          atRight = rel + btn.offsetWidth > nav.clientWidth - step / 2;
-        if (!atLeft && !atRight) return;
-        const max = nav.scrollWidth - nav.clientWidth;
-        const left = Math.min(max, Math.max(0, btn.offsetLeft - step - 4));
-        if (Math.abs(left - nav.scrollLeft) < 2) return;
-        nav.scrollTo({ left, behavior: "smooth" });
+        // centre the active tab; Overview and Exports stay at the ends (no blank space)
+        const max = nav.scrollWidth - nav.clientWidth,
+          left = Math.min(
+            max,
+            Math.max(0, btn.offsetLeft + btn.offsetWidth / 2 - nav.clientWidth / 2),
+          );
+        nav.scrollTo({ left, behavior: instant ? "instant" : "smooth" });
       }
       function render() {
         const m = selectedMonth(),
@@ -5973,9 +5962,8 @@
         $("#startupTitle").textContent = title;
         $("#startupMessage").textContent = message;
         $("#startupAuthBtn").style.display = showAuth ? "block" : "none";
-        $("#startupLocalBtn").style.display = showLocal ? "block" : "none";
         const sk = $("#startupSkeleton");
-        if (sk) sk.style.display = showAuth || showLocal ? "none" : "grid";
+        if (sk) sk.style.display = showAuth ? "none" : "grid";
       }
       function finishStartup() {
         startupFinished = true;
@@ -6231,7 +6219,11 @@
           await fetchAccessToken();
         } catch (err) {
           if (err.code === "signin") startupFallback();
-          else startupMessage("Sync unavailable", err.message, true, true);
+          else if (hasLocal) {
+            // already signed in before, but offline or Google is unreachable: open the saved data
+            finishStartup();
+            toast("Couldn't reach Google. Showing your saved data.");
+          } else startupMessage("Sync unavailable", err.message, true, true);
           return;
         }
         // Token in hand: open instantly from the local copy and pull Drive changes in the background.
@@ -6254,10 +6246,6 @@
       }
       $("#startupAuthBtn").addEventListener("click", () => {
         location.href = "/api/google-start";
-      });
-      $("#startupLocalBtn").addEventListener("click", () => {
-        finishStartup();
-        toast("Opened local browser copy. Drive has not been synced.");
       });
       if ("serviceWorker" in navigator)
         window.addEventListener("load", () =>
@@ -6874,48 +6862,34 @@
           }
           return data.purchases.filter((p) => p.date?.startsWith(m));
         }
-        // One ring segment with softly rounded corners: inset the shape, then stroke it with a round join.
-        function catSegment(a0, a1, color) {
+        // Ring made of evenly spaced rounded "capsule" arcs. Every share gets at least a
+        // full-thickness dot, and the rest of the circle is split by size, so gaps and ends
+        // stay even and small categories never turn into odd little specks.
+        function catRing(sorted, total) {
           const cx = 100,
             cy = 100,
-            R = 94,
-            r = 52,
-            c = 4.5,
-            gap = 2.2,
-            pt = (rad, a) => [cx + rad * Math.cos(a), cy + rad * Math.sin(a)];
-          const Ro = R - c,
-            Ri = r + c,
-            off = (rad) => (gap / 2 + c) / rad;
-          let o0 = a0 + off(Ro),
-            o1 = a1 - off(Ro),
-            i0 = a0 + off(Ri),
-            i1 = a1 - off(Ri);
-          if (o1 <= o0) {
-            const m = (a0 + a1) / 2;
-            o0 = o1 = m;
-          }
-          if (i1 <= i0) {
-            const m = (a0 + a1) / 2;
-            i0 = i1 = m;
-          }
-          const large = (x, y) => (y - x > Math.PI ? 1 : 0),
+            sw = 24, // ring thickness (outer edge stays at radius 94)
+            rm = 94 - sw / 2,
+            gap = 5,
             f = (n) => n.toFixed(2);
-          const [x1, y1] = pt(Ro, o0),
-            [x2, y2] = pt(Ro, o1),
-            [x3, y3] = pt(Ri, i1),
-            [x4, y4] = pt(Ri, i0);
-          return `<path d="M${f(x1)} ${f(y1)}A${Ro} ${Ro} 0 ${large(o0, o1)} 1 ${f(x2)} ${f(y2)}L${f(x3)} ${f(y3)}A${Ri} ${Ri} 0 ${large(i0, i1)} 0 ${f(x4)} ${f(y4)}Z" fill="${color}" stroke="${color}" stroke-width="${c * 2}" stroke-linejoin="round"/>`;
-        }
-        function catRing(sorted, total) {
           if (sorted.length === 1)
-            return `<circle cx="100" cy="100" r="73" fill="none" stroke="${sorted[0].color}" stroke-width="42"/>`;
-          let ang = -Math.PI / 2;
+            return `<circle cx="100" cy="100" r="${rm}" fill="none" stroke="${sorted[0].color}" stroke-width="${sw}"/>`;
+          const n = sorted.length,
+            free = Math.max(0, 2 * Math.PI * rm - n * (sw + gap)),
+            toA = (len) => -Math.PI / 2 + len / rm,
+            pt = (a) => [cx + rm * Math.cos(a), cy + rm * Math.sin(a)];
+          let pos = 0;
           return sorted
             .map((x) => {
-              const span = (x.val / total) * Math.PI * 2,
-                seg = catSegment(ang, ang + span, x.color);
-              ang += span;
-              return seg;
+              const extra = (x.val / total) * free,
+                a0 = toA(pos + gap / 2 + sw / 2),
+                a1 = toA(pos + gap / 2 + sw / 2 + extra),
+                [x1, y1] = pt(a0),
+                [x2, y2] = pt(a1);
+              pos += sw + gap + extra;
+              if (extra < 0.5)
+                return `<circle cx="${f(x1)}" cy="${f(y1)}" r="${sw / 2}" fill="${x.color}"/>`;
+              return `<path d="M${f(x1)} ${f(y1)}A${rm} ${rm} 0 ${a1 - a0 > Math.PI ? 1 : 0} 1 ${f(x2)} ${f(y2)}" fill="none" stroke="${x.color}" stroke-width="${sw}" stroke-linecap="round"/>`;
             })
             .join("");
         }
@@ -7723,6 +7697,17 @@
         flex: 0 0 auto;
       }
       @media (max-width: 680px) {
+        /* tab strip: tapped tab centres; first and last tabs stay flush at the ends */
+        body .seg-nav {
+          scroll-snap-type: none;
+          scroll-padding-inline: 0;
+          touch-action: pan-x pan-y;
+        }
+        body .seg-nav button {
+          scroll-snap-stop: normal;
+        }
+      }
+      @media (max-width: 680px) {
         /* no arrows on phones: swipe the month bar instead */
         body .top-actions .month-nav .month-step {
           display: none !important;
@@ -7828,6 +7813,66 @@
             bar.classList.add(next ? "month-swipe-l" : "month-swipe-r");
           }
         }, { passive: true });
+      })();
+    </script>
+    <script id="seg-center-init">
+      (function () {
+        var nav = document.getElementById("segNav");
+        if (!nav) return;
+        var mq = window.matchMedia("(max-width:680px)");
+        var touching = false, timer = 0, lastW = window.innerWidth;
+        function targetFor(btn) {
+          var max = nav.scrollWidth - nav.clientWidth;
+          return Math.min(max, Math.max(0, btn.offsetLeft + btn.offsetWidth / 2 - nav.clientWidth / 2));
+        }
+        function nearest() {
+          var mid = nav.scrollLeft + nav.clientWidth / 2, best = null, bd = Infinity;
+          nav.querySelectorAll("button").forEach(function (b) {
+            var d = Math.abs(b.offsetLeft + b.offsetWidth / 2 - mid);
+            if (d < bd) { bd = d; best = b; }
+          });
+          return best;
+        }
+        var startTab = null, startScroll = 0;
+        // after a swipe (any length, any speed) glide to a tab centre; even a short
+        // swipe moves one tab in the swipe direction instead of snapping back
+        function settle() {
+          if (!mq.matches || touching) return;
+          var best = nearest();
+          if (!best) return;
+          var moved = nav.scrollLeft - startScroll;
+          if (startTab && best === startTab && Math.abs(moved) >= 16) {
+            var nb = moved > 0 ? best.nextElementSibling : best.previousElementSibling;
+            if (nb && nb.tagName === "BUTTON") best = nb;
+          }
+          startTab = null;
+          var left = targetFor(best);
+          if (Math.abs(left - nav.scrollLeft) > 1) nav.scrollTo({ left: left, behavior: "smooth" });
+        }
+        function later() {
+          clearTimeout(timer);
+          timer = setTimeout(settle, 140);
+        }
+        nav.addEventListener("scroll", later, { passive: true });
+        nav.addEventListener("touchstart", function () {
+          touching = true;
+          clearTimeout(timer);
+          startTab = nearest();
+          startScroll = nav.scrollLeft;
+        }, { passive: true });
+        nav.addEventListener("touchend", function () { touching = false; later(); }, { passive: true });
+        nav.addEventListener("touchcancel", function () { touching = false; later(); }, { passive: true });
+        function init() {
+          if (typeof centerSegTab === "function") centerSegTab(true);
+        }
+        window.addEventListener("load", init);
+        window.addEventListener("orientationchange", init);
+        // only re-centre when the width really changed (not on address-bar / keyboard resizes)
+        window.addEventListener("resize", function () {
+          if (window.innerWidth !== lastW) { lastW = window.innerWidth; init(); }
+        });
+        setTimeout(init, 400);
+        setTimeout(init, 1500);
       })();
     </script>
 </body>
